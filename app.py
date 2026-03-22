@@ -134,12 +134,14 @@ def efficiency(best, t):
     return round(best / (t + 1e-6), 2)
 
 # =========================
-# QGA Simulation
+# QGA Simulation (FIXED)
 # =========================
 def run_qga(use_crossover=False, generate_gif=True):
     theta = init_theta()
-    best_fit = 0
+
+    best_fit = -1   # FIX
     best_sol = None
+
     fitness_history = []
     avg_history = []
 
@@ -151,7 +153,9 @@ def run_qga(use_crossover=False, generate_gif=True):
         fits = np.array([fitness(ind) for ind in population])
 
         best_idx = np.argmax(fits)
-        if fits[best_idx] > best_fit:
+
+        # FIX: always update safely
+        if best_sol is None or fits[best_idx] > best_fit:
             best_fit = fits[best_idx]
             best_sol = population[best_idx]
 
@@ -159,7 +163,8 @@ def run_qga(use_crossover=False, generate_gif=True):
         avg_history.append(np.mean(fits))
 
         for i in range(POP_SIZE):
-            theta[i] = q_rotation(theta[i], population[i], best_sol)
+            if best_sol is not None:  # FIX
+                theta[i] = q_rotation(theta[i], population[i], best_sol)
             theta[i] = q_mutation(theta[i])
             theta[i] = np.clip(theta[i], 0, np.pi)
 
@@ -171,7 +176,6 @@ def run_qga(use_crossover=False, generate_gif=True):
                     else:
                         theta[i], theta[i+1] = q_crossover_avg(theta[i], theta[i+1])
 
-        # Save GIF frames (only if needed)
         if generate_gif and g % 3 == 0:
             fig = plot_circle(theta)
             buf = io.BytesIO()
@@ -183,7 +187,7 @@ def run_qga(use_crossover=False, generate_gif=True):
         progress.progress((g + 1) / GENS)
 
     gif_bytes = None
-    if generate_gif:
+    if generate_gif and len(frames) > 0:
         gif_bytes = io.BytesIO()
         imageio.mimsave(gif_bytes, frames, format="GIF", duration=0.08)
         gif_bytes.seek(0)
@@ -195,7 +199,7 @@ def run_qga(use_crossover=False, generate_gif=True):
 # =========================
 def run_ga():
     pop = init_population()
-    best_fit = 0
+    best_fit = -1
     best_sol = None
     fitness_history = []
     avg_history = []
@@ -204,7 +208,7 @@ def run_ga():
         fits = np.array([fitness(ind) for ind in pop])
 
         idx = np.argmax(fits)
-        if fits[idx] > best_fit:
+        if best_sol is None or fits[idx] > best_fit:
             best_fit = fits[idx]
             best_sol = pop[idx]
 
@@ -304,7 +308,6 @@ if st.button("📊 Compare All Algorithms"):
         ]
     })
 
-    # Insight
     st.subheader("🧠 Insights")
 
     if b2 >= b1 and b2 >= b3:
