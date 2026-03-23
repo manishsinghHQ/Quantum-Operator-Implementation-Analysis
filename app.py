@@ -13,7 +13,7 @@ st.set_page_config(page_title="QGA vs GA Simulator", layout="wide")
 st.sidebar.title("⚙️ Controls")
 
 POP_SIZE = st.sidebar.slider("Population Size", 10, 100, 30)
-GENS = st.sidebar.slider("Generations", 50, 300, 150)
+GENS = st.sidebar.slider("Generations", 50, 300, 200)
 MUT_RATE = st.sidebar.slider("Mutation Rate", 0.0, 0.1, 0.01)
 
 dataset_type = st.sidebar.selectbox("Dataset", ["Easy", "Hard"])
@@ -23,7 +23,7 @@ algo_choice = st.sidebar.selectbox(
 )
 
 # =========================
-# Knapsack Data
+# Knapsack
 # =========================
 def generate_knapsack(n=50, hard=False):
     np.random.seed(42 if not hard else 99)
@@ -33,9 +33,6 @@ def generate_knapsack(n=50, hard=False):
     return weights, values, capacity
 
 weights, values, capacity = generate_knapsack(50, dataset_type == "Hard")
-
-st.sidebar.write(f"Capacity: {capacity}")
-st.sidebar.write(f"Items: {len(weights)}")
 
 # =========================
 # Fitness
@@ -47,78 +44,93 @@ def fitness(sol):
     return np.sum(sol * values)
 
 # =========================
-# QGA FUNCTIONS
+# QBIT REPRESENTATION
 # =========================
-def init_theta():
-    return np.full((POP_SIZE, len(weights)), np.pi / 4)
+def init_qbit():
+    alpha = np.full((POP_SIZE, len(weights)), 1/np.sqrt(2))
+    beta = np.full((POP_SIZE, len(weights)), 1/np.sqrt(2))
+    return alpha, beta
 
-def measure(theta):
-    probs = np.sin(theta) ** 2
+def measure(alpha, beta):
+    probs = beta ** 2
     return (np.random.rand(*probs.shape) < probs).astype(int)
 
-def q_rotation(theta, x, best):
-    delta = 0.03
-    for i in range(len(theta)):
-        if x[i] == 0 and best[i] == 1:
-            theta[i] += delta
-        elif x[i] == 1 and best[i] == 0:
-            theta[i] -= delta
-    return theta
+# =========================
+# Q-ROTATION (CORE)
+# =========================
+def q_rotation(alpha, beta, x, best):
+    delta = 0.02
 
-def q_mutation(theta):
-    mask = np.random.rand(len(theta)) < MUT_RATE
-    theta[mask] += np.random.uniform(-0.1, 0.1, np.sum(mask))
-    return theta
+    for i in range(len(alpha)):
+        if x[i] == best[i]:
+            continue
 
-def q_crossover_swap(p1, p2):
-    point = np.random.randint(len(p1))
-    return (
-        np.concatenate([p1[:point], p2[point:]]),
-        np.concatenate([p2[:point], p1[point:]])
-    )
+        direction = +1 if (x[i] == 0 and best[i] == 1) else -1
 
-def q_crossover_avg(p1, p2):
-    avg = (p1 + p2) / 2
-    return avg.copy(), avg.copy()
+        a, b = alpha[i], beta[i]
+
+        alpha[i] = a * np.cos(direction * delta) - b * np.sin(direction * delta)
+        beta[i]  = a * np.sin(direction * delta) + b * np.cos(direction * delta)
+
+    return alpha, beta
 
 # =========================
-# Classical GA
+# Q-MUTATION
 # =========================
-def init_population():
-    return np.random.randint(0, 2, (POP_SIZE, len(weights)))
+def q_mutation(alpha, beta):
+    mask = np.random.rand(len(alpha)) < MUT_RATE
+    noise = np.random.uniform(-0.05, 0.05, np.sum(mask))
 
-def crossover(p1, p2):
-    point = np.random.randint(len(p1))
-    return (
-        np.concatenate([p1[:point], p2[point:]]),
-        np.concatenate([p2[:point], p1[point:]])
-    )
+    for idx, n in zip(np.where(mask)[0], noise):
+        a, b = alpha[idx], beta[idx]
+        alpha[idx] = a * np.cos(n) - b * np.sin(n)
+        beta[idx]  = a * np.sin(n) + b * np.cos(n)
 
-def mutate(sol):
-    mask = np.random.rand(len(sol)) < MUT_RATE
-    sol[mask] = 1 - sol[mask]
-    return sol
+    return alpha, beta
 
 # =========================
-# Visualization
+# Q-CROSSOVER
 # =========================
-def plot_circle(theta):
-    x = np.cos(theta.flatten())
-    y = np.sin(theta.flatten())
+def q_crossover_swap(a1, b1, a2, b2):
+    point = np.random.randint(len(a1))
+    c1_a = np.concatenate([a1[:point], a2[point:]])
+    c1_b = np.concatenate([b1[:point], b2[point:]])
+    c2_a = np.concatenate([a2[:point], a1[point:]])
+    c2_b = np.concatenate([b2[:point], b1[point:]])
+    return c1_a, c1_b, c2_a, c2_b
+
+def q_crossover_avg(a1, b1, a2, b2):
+    c_a = (a1 + a2) / 2
+    c_b = (b1 + b2) / 2
+    norm = np.sqrt(c_a**2 + c_b**2)
+    return c_a/norm, c_b/norm, c_a/norm, c_b/norm
+
+def q_crossover_interference(a1, b1, a2, b2):
+    c_a = (a1 + a2) / 2
+    c_b = (b1 + b2) / 2
+    norm = np.sqrt(c_a**2 + c_b**2)
+    return c_a/norm, c_b/norm, c_a/norm, c_b/norm
+
+# =========================
+# BLOCH VISUALIZATION
+# =========================
+def plot_bloch(alpha, beta):
+    x = 2 * alpha.flatten() * beta.flatten()
+    z = alpha.flatten()**2 - beta.flatten()**2
 
     fig, ax = plt.subplots()
-    ax.scatter(x, y, s=5)
+    ax.scatter(x, z, s=5)
 
     circle = plt.Circle((0, 0), 1, fill=False)
     ax.add_patch(circle)
 
     ax.set_xlim(-1, 1)
     ax.set_ylim(-1, 1)
-    ax.set_title("Q-bit States (Unit Circle)")
+    ax.set_title("Bloch Projection (X-Z Plane)")
     return fig
 
 # =========================
-# Metrics
+# METRICS
 # =========================
 def convergence_point(history):
     best = max(history)
@@ -134,50 +146,53 @@ def efficiency(best, t):
     return round(best / (t + 1e-6), 2)
 
 # =========================
-# QGA Simulation (FIXED)
+# QGA RUN
 # =========================
 def run_qga(use_crossover=False, generate_gif=True):
-    theta = init_theta()
+    alpha, beta = init_qbit()
 
-    best_fit = -1   # FIX
+    best_fit = -1
     best_sol = None
 
     fitness_history = []
     avg_history = []
-
     frames = []
+
     progress = st.progress(0)
 
     for g in range(GENS):
-        population = measure(theta)
+        population = measure(alpha, beta)
         fits = np.array([fitness(ind) for ind in population])
 
-        best_idx = np.argmax(fits)
+        idx = np.argmax(fits)
 
-        # FIX: always update safely
-        if best_sol is None or fits[best_idx] > best_fit:
-            best_fit = fits[best_idx]
-            best_sol = population[best_idx]
+        if best_sol is None or fits[idx] > best_fit:
+            best_fit = fits[idx]
+            best_sol = population[idx]
 
         fitness_history.append(best_fit)
         avg_history.append(np.mean(fits))
 
         for i in range(POP_SIZE):
-            if best_sol is not None:  # FIX
-                theta[i] = q_rotation(theta[i], population[i], best_sol)
-            theta[i] = q_mutation(theta[i])
-            theta[i] = np.clip(theta[i], 0, np.pi)
+            alpha[i], beta[i] = q_rotation(alpha[i], beta[i], population[i], best_sol)
+            alpha[i], beta[i] = q_mutation(alpha[i], beta[i])
 
         if use_crossover:
             for i in range(0, POP_SIZE, 2):
                 if i + 1 < POP_SIZE:
-                    if np.random.rand() < 0.5:
-                        theta[i], theta[i+1] = q_crossover_swap(theta[i], theta[i+1])
+                    r = np.random.rand()
+                    if r < 0.33:
+                        alpha[i], beta[i], alpha[i+1], beta[i+1] = q_crossover_swap(
+                            alpha[i], beta[i], alpha[i+1], beta[i+1])
+                    elif r < 0.66:
+                        alpha[i], beta[i], alpha[i+1], beta[i+1] = q_crossover_avg(
+                            alpha[i], beta[i], alpha[i+1], beta[i+1])
                     else:
-                        theta[i], theta[i+1] = q_crossover_avg(theta[i], theta[i+1])
+                        alpha[i], beta[i], alpha[i+1], beta[i+1] = q_crossover_interference(
+                            alpha[i], beta[i], alpha[i+1], beta[i+1])
 
         if generate_gif and g % 3 == 0:
-            fig = plot_circle(theta)
+            fig = plot_bloch(alpha, beta)
             buf = io.BytesIO()
             fig.savefig(buf, format="png")
             buf.seek(0)
@@ -195,10 +210,11 @@ def run_qga(use_crossover=False, generate_gif=True):
     return fitness_history, avg_history, best_fit, best_sol, gif_bytes
 
 # =========================
-# Classical GA
+# CLASSICAL GA
 # =========================
 def run_ga():
-    pop = init_population()
+    pop = np.random.randint(0, 2, (POP_SIZE, len(weights)))
+
     best_fit = -1
     best_sol = None
     fitness_history = []
@@ -218,9 +234,19 @@ def run_ga():
         new_pop = []
         for _ in range(POP_SIZE // 2):
             p1, p2 = pop[np.random.choice(POP_SIZE, 2)]
-            c1, c2 = crossover(p1, p2)
-            new_pop.append(mutate(c1))
-            new_pop.append(mutate(c2))
+            point = np.random.randint(len(p1))
+
+            c1 = np.concatenate([p1[:point], p2[point:]])
+            c2 = np.concatenate([p2[:point], p1[point:]])
+
+            mask1 = np.random.rand(len(c1)) < MUT_RATE
+            mask2 = np.random.rand(len(c2)) < MUT_RATE
+
+            c1[mask1] = 1 - c1[mask1]
+            c2[mask2] = 1 - c2[mask2]
+
+            new_pop.append(c1)
+            new_pop.append(c2)
 
         pop = np.array(new_pop)
 
@@ -229,7 +255,7 @@ def run_ga():
 # =========================
 # UI
 # =========================
-st.title("⚛️ Quantum Genetic Algorithm Simulator")
+st.title("⚛️ Quantum Genetic Algorithm Simulator (Research Grade)")
 
 if st.button("🚀 Run Simulation"):
 
@@ -237,52 +263,41 @@ if st.button("🚀 Run Simulation"):
         hist, avg_hist, best, sol = run_ga()
         gif = None
     else:
-        hist, avg_hist, best, sol, gif = run_qga("Crossover" in algo_choice, True)
+        hist, avg_hist, best, sol, gif = run_qga("Crossover" in algo_choice)
 
     st.success(f"Best Fitness: {best}")
 
-    st.subheader("📈 Convergence Plot")
     st.line_chart({
         "Best Fitness": hist,
         "Average Fitness": avg_hist
     })
 
     if gif:
-        st.subheader("🎥 Q-bit Evolution")
         st.image(gif)
 
-    st.subheader("🎯 Best Solution")
-    selected = np.where(sol == 1)[0]
-    st.write(f"Selected Items: {selected}")
-    st.write(f"Items Selected: {np.sum(sol)} / {len(sol)}")
-    st.write(f"Total Weight: {np.sum(sol * weights)} / {capacity}")
-    st.write(f"Total Value: {np.sum(sol * values)}")
-
 # =========================
-# Compare All
+# COMPARE
 # =========================
 if st.button("📊 Compare All Algorithms"):
 
     start = time.time()
-    h1, a1, b1, _, _ = run_qga(False, generate_gif=False)
+    h1, _, b1, _, _ = run_qga(False, False)
     t1 = time.time() - start
 
     start = time.time()
-    h2, a2, b2, _, _ = run_qga(True, generate_gif=False)
+    h2, _, b2, _, _ = run_qga(True, False)
     t2 = time.time() - start
 
     start = time.time()
-    h3, a3, b3, _ = run_ga()
+    h3, _, b3, _ = run_ga()
     t3 = time.time() - start
 
-    st.subheader("📈 Comparison Graph")
     st.line_chart({
         "QGA Rotation": h1,
         "QGA + Crossover": h2,
         "Classical GA": h3
     })
 
-    st.subheader("📋 Comparison Table")
     st.table({
         "Algorithm": ["QGA Rotation", "QGA + Crossover", "Classical GA"],
         "Best Fitness": [b1, b2, b3],
@@ -307,12 +322,3 @@ if st.button("📊 Compare All Algorithms"):
             efficiency(b3, t3)
         ]
     })
-
-    st.subheader("🧠 Insights")
-
-    if b2 >= b1 and b2 >= b3:
-        st.success("QGA + Crossover performed best overall 🚀")
-    elif b1 >= b2 and b1 >= b3:
-        st.success("QGA Rotation performed best ⚛️")
-    else:
-        st.success("Classical GA performed best 🧬")
